@@ -154,3 +154,12 @@ plugin:
                     <url>http://maven.davidtrott.com/repository</url>
                 </pluginRepository>
             </pluginRepositories>
+
+By default the plugin will generate the Java code, you can specify any other language, or a list of them, in the configuration:
+
+    <configuration>
+        <generator>
+            <generator>java:hashcode</generator>
+            <generator>csharp</generator>
+        </generator>
+    </configuration>
