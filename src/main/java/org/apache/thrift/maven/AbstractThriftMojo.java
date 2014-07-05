@@ -21,6 +21,7 @@ package org.apache.thrift.maven;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Lists;
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.plugin.AbstractMojo;
@@ -69,6 +70,8 @@ abstract class AbstractThriftMojo extends AbstractMojo {
 
     private static final String DEFAULT_INCLUDES = "**/*" + THRIFT_FILE_SUFFIX;
 
+    private static final String DEFAULT_GENERATION_ID = "java:hashcode";
+
     /**
      * The current Maven project.
      *
@@ -99,9 +102,9 @@ abstract class AbstractThriftMojo extends AbstractMojo {
      * it will generate Java output. The main reason for this option is to be able to add options
      * to the Java generator - if you generate something else, you're on your own.
      *
-     * @parameter default-value="java:hashcode"
+     * @parameter
      */
-    private String generator;
+    private List<String> generator;
 
     /**
      * @parameter
@@ -164,50 +167,60 @@ abstract class AbstractThriftMojo extends AbstractMojo {
         checkParameters();
         final File thriftSourceRoot = getThriftSourceRoot();
         if (thriftSourceRoot.exists()) {
-            try {
-                ImmutableSet<File> thriftFiles = findThriftFilesInDirectory(thriftSourceRoot);
-                final File outputDirectory = getOutputDirectory();
-                ImmutableSet<File> outputFiles = findGeneratedFilesInDirectory(getOutputDirectory());
-
-                if (thriftFiles.isEmpty()) {
-                    getLog().info("No thrift files to compile.");
-                } else if (checkStaleness && ((lastModified(thriftFiles) + staleMillis) < lastModified(outputFiles))) {
-                    getLog().info("Skipping compilation because target directory newer than sources.");
-                    attachFiles();
-                } else {
-                    ImmutableSet<File> derivedThriftPathElements =
-                            makeThriftPathFromJars(temporaryThriftFileDirectory, getDependencyArtifactFiles());
-                    outputDirectory.mkdirs();
-
-                    // Quick fix to fix issues with two mvn installs in a row (ie no clean)
-                    cleanDirectory(outputDirectory);
-
-                    Thrift thrift = new Thrift.Builder(thriftExecutable, outputDirectory)
-                            .setGenerator(generator)
-                            .addThriftPathElement(thriftSourceRoot)
-                            .addThriftPathElements(derivedThriftPathElements)
-                            .addThriftPathElements(asList(additionalThriftPathElements))
-                            .addThriftFiles(thriftFiles)
-                            .build();
-                    final int exitStatus = thrift.compile();
-                    if (exitStatus != 0) {
-                        getLog().error("thrift failed output: " + thrift.getOutput());
-                        getLog().error("thrift failed error: " + thrift.getError());
-                        throw new MojoFailureException(
-                                "thrift did not exit cleanly. Review output for more information.");
-                    }
-                    attachFiles();
-                }
-            } catch (IOException e) {
-                throw new MojoExecutionException("An IO error occured", e);
-            } catch (IllegalArgumentException e) {
-                throw new MojoFailureException("thrift failed to execute because: " + e.getMessage(), e);
-            } catch (CommandLineException e) {
-                throw new MojoExecutionException("An error occurred while invoking thrift.", e);
+            ImmutableSet<File> thriftFiles = findThriftFilesInDirectory(thriftSourceRoot);
+            for (String generatorId : generator) {
+                compileThrift(thriftFiles, generatorId, getOutputDirectory(generatorId), thriftSourceRoot);
             }
         } else {
             getLog().info(format("%s does not exist. Review the configuration or consider disabling the plugin.",
                     thriftSourceRoot));
+        }
+    }
+
+    private File getOutputDirectory(String generatorId) {
+        return new File(getOutputDirectory().getAbsolutePath() + "-" + generatorId.split(":")[0]);
+    }
+
+    private void compileThrift(ImmutableSet<File> thriftFiles, String generatorId,
+                               final File outputDirectory, File thriftSourceRoot) throws MojoExecutionException, MojoFailureException {
+        try {
+            ImmutableSet<File> outputFiles = findGeneratedFilesInDirectory(outputDirectory);
+
+            if (thriftFiles.isEmpty()) {
+                getLog().info("No thrift files to compile.");
+            } else if (checkStaleness && ((lastModified(thriftFiles) + staleMillis) < lastModified(outputFiles))) {
+                getLog().info("Skipping compilation because target directory newer than sources.");
+                attachFiles(outputDirectory);
+            } else {
+                ImmutableSet<File> derivedThriftPathElements =
+                        makeThriftPathFromJars(temporaryThriftFileDirectory, getDependencyArtifactFiles());
+                outputDirectory.mkdirs();
+
+                // Quick fix to fix issues with two mvn installs in a row (ie no clean)
+                cleanDirectory(outputDirectory);
+
+                Thrift thrift = new Thrift.Builder(thriftExecutable, outputDirectory)
+                        .setGenerator(generatorId)
+                        .addThriftPathElement(thriftSourceRoot)
+                        .addThriftPathElements(derivedThriftPathElements)
+                        .addThriftPathElements(asList(additionalThriftPathElements))
+                        .addThriftFiles(thriftFiles)
+                        .build();
+                final int exitStatus = thrift.compile();
+                if (exitStatus != 0) {
+                    getLog().error("thrift failed output: " + thrift.getOutput());
+                    getLog().error("thrift failed error: " + thrift.getError());
+                    throw new MojoFailureException(
+                            "thrift did not exit cleanly. Review output for more information.");
+                }
+                attachFiles(outputDirectory);
+            }
+        } catch (IOException e) {
+            throw new MojoExecutionException("An IO error occured", e);
+        } catch (IllegalArgumentException e) {
+            throw new MojoFailureException("thrift failed to execute because: " + e.getMessage(), e);
+        } catch (CommandLineException e) {
+            throw new MojoExecutionException("An error occurred while invoking thrift.", e);
         }
     }
 
@@ -234,7 +247,6 @@ abstract class AbstractThriftMojo extends AbstractMojo {
         checkNotNull(project, "project");
         checkNotNull(projectHelper, "projectHelper");
         checkNotNull(thriftExecutable, "thriftExecutable");
-        checkNotNull(generator, "generator");
         final File thriftSourceRoot = getThriftSourceRoot();
         checkNotNull(thriftSourceRoot);
         checkArgument(!thriftSourceRoot.isFile(), "thriftSourceRoot is a file, not a diretory");
@@ -243,6 +255,10 @@ abstract class AbstractThriftMojo extends AbstractMojo {
         final File outputDirectory = getOutputDirectory();
         checkNotNull(outputDirectory);
         checkState(!outputDirectory.isFile(), "the outputDirectory is a file, not a directory");
+
+        if (generator == null || generator.isEmpty()) {
+            generator = Lists.newArrayList(DEFAULT_GENERATION_ID);
+        }
     }
 
     protected abstract File getThriftSourceRoot();
@@ -251,7 +267,7 @@ abstract class AbstractThriftMojo extends AbstractMojo {
 
     protected abstract File getOutputDirectory();
 
-    protected abstract void attachFiles();
+    protected abstract void attachFiles(File outputDirectory);
 
     /**
      * Gets the {@link File} for each dependency artifact.
@@ -318,7 +334,7 @@ abstract class AbstractThriftMojo extends AbstractMojo {
         return ImmutableSet.copyOf(thriftDirectories);
     }
 
-    ImmutableSet<File> findThriftFilesInDirectory(File directory) throws IOException {
+    ImmutableSet<File> findThriftFilesInDirectory(File directory) throws MojoExecutionException {
         checkNotNull(directory);
         checkArgument(directory.isDirectory(), "%s is not a directory", directory);
 
@@ -326,11 +342,17 @@ abstract class AbstractThriftMojo extends AbstractMojo {
 
         // TODO(gak): plexus-utils needs generics
         @SuppressWarnings("unchecked")
-        List<File> thriftFilesInDirectory = getFiles(directory, joiner.join(includes), joiner.join(excludes));
+        List<File> thriftFilesInDirectory = null;
+        try {
+            thriftFilesInDirectory = getFiles(directory, joiner.join(includes), joiner.join(excludes));
+        } catch (IOException e) {
+            throw new MojoExecutionException("An IO error occured", e);
+        }
+
         return ImmutableSet.copyOf(thriftFilesInDirectory);
     }
 
-    ImmutableSet<File> findThriftFilesInDirectories(Iterable<File> directories) throws IOException {
+    ImmutableSet<File> findThriftFilesInDirectories(Iterable<File> directories) throws MojoExecutionException {
         checkNotNull(directories);
         Set<File> thriftFiles = newHashSet();
         for (File directory : directories) {

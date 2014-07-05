@@ -74,7 +74,7 @@ public final class ThriftCompileMojo extends AbstractThriftMojo {
     }
 
     @Override
-    protected void attachFiles() {
+    protected void attachFiles(File outputDirectory) {
         project.addCompileSourceRoot(outputDirectory.getAbsolutePath());
         projectHelper.addResource(project, thriftSourceRoot.getAbsolutePath(),
                 ImmutableList.of("**/*.thrift"), ImmutableList.of());
